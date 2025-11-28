@@ -98,11 +98,8 @@ const KayNodeAlignmentManager = {
         this.bindCanvasEvents();
         this.bindKeyboardShortcuts();
 
-        // Show toolbar by default FIRST (like node_info.js does)
-        console.log('[KayTool.NodeAlign] Showing toolbar by default...');
-        this.show();
-
-        // Then check settings and update display mode (with safe fallback)
+        // Check settings and update display mode (with safe fallback)
+        // Don't show by default - let updateDisplayMode decide based on mode
         try {
             if (app.ui && app.ui.settings) {
                 const displayMode = app.ui.settings.getSettingValue("KayTool.NodeAlignDisplayMode");
@@ -176,12 +173,16 @@ const KayNodeAlignmentManager = {
             #kay-node-alignment-toolbar.floating { 
                 position: fixed !important; 
                 left: 50% !important;
-                top: 5% !important;
+                top: 20px !important;
                 transform: translate(-50%, 0) !important;
             }
             #kay-node-alignment-toolbar.attached { 
                 position: relative; 
                 margin-left: 10px; 
+            }
+            #kay-node-alignment-toolbar.kay-toolbar-hidden {
+                display: none !important;
+                visibility: hidden !important;
             }
             .kay-align-button {
                 width: 25px;
@@ -283,8 +284,15 @@ const KayNodeAlignmentManager = {
             this.toolbarContainer.id = 'kay-node-alignment-toolbar';
             this.toolbarContainer.classList.add(this.position.isAttached ? 'attached' : 'floating');
             
-            // Ensure toolbar is visible by default with forced styles
-            this.toolbarContainer.style.display = 'flex';
+            // Set base styles - but don't show yet (updateDisplayMode will control visibility)
+            if (!this.position.isAttached) {
+                // Force fixed positioning for floating toolbars
+                this.toolbarContainer.style.position = 'fixed';
+                this.toolbarContainer.style.left = '50%';
+                this.toolbarContainer.style.top = '20px';
+                this.toolbarContainer.style.transform = 'translate(-50%, 0)';
+            }
+            this.toolbarContainer.style.display = 'none'; // Start hidden - updateDisplayMode will show it
             this.toolbarContainer.style.visibility = 'visible';
             this.toolbarContainer.style.opacity = '1';
             this.toolbarContainer.style.zIndex = '10000';
@@ -430,38 +438,51 @@ const KayNodeAlignmentManager = {
         this.isVisible = true;
         if (this.toolbarContainer) {
             console.log('[KayTool.NodeAlign] Showing toolbar container');
-            this.toolbarContainer.style.display = 'flex';
+            // Remove hidden class first
+            this.toolbarContainer.classList.remove('kay-toolbar-hidden');
+            // Use setProperty with important flag to override CSS !important rules
+            this.toolbarContainer.style.setProperty('display', 'flex', 'important');
             
             // Force visibility
-            this.toolbarContainer.style.visibility = 'visible';
+            this.toolbarContainer.style.setProperty('visibility', 'visible', 'important');
             this.toolbarContainer.style.opacity = '1';
+            this.toolbarContainer.style.zIndex = '10000';
+            
+            // Force fixed positioning for floating toolbars
+            if (!this.position.isAttached) {
+                this.toolbarContainer.style.position = 'fixed';
+                this.toolbarContainer.classList.remove('attached');
+                this.toolbarContainer.classList.add('floating');
+                // Update position after ensuring it's fixed
+                requestAnimationFrame(() => {
+                    this.updatePosition();
+                });
+            }
             
             // Log computed styles for debugging
-            const computedStyle = window.getComputedStyle(this.toolbarContainer);
-            const rect = this.toolbarContainer.getBoundingClientRect();
-            console.log('[KayTool.NodeAlign] Toolbar visibility state:', {
-                display: computedStyle.display,
-                visibility: computedStyle.visibility,
-                opacity: computedStyle.opacity,
-                zIndex: computedStyle.zIndex,
-                position: computedStyle.position,
-                left: computedStyle.left,
-                top: computedStyle.top,
-                width: rect.width,
-                height: rect.height,
-                inViewport: rect.width > 0 && rect.height > 0,
-                bounds: {
-                    left: rect.left,
-                    top: rect.top,
-                    right: rect.right,
-                    bottom: rect.bottom
-                },
-                inDOM: document.body.contains(this.toolbarContainer)
+            requestAnimationFrame(() => {
+                const computedStyle = window.getComputedStyle(this.toolbarContainer);
+                const rect = this.toolbarContainer.getBoundingClientRect();
+                console.log('[KayTool.NodeAlign] Toolbar visibility state:', {
+                    display: computedStyle.display,
+                    visibility: computedStyle.visibility,
+                    opacity: computedStyle.opacity,
+                    zIndex: computedStyle.zIndex,
+                    position: computedStyle.position,
+                    left: computedStyle.left,
+                    top: computedStyle.top,
+                    width: rect.width,
+                    height: rect.height,
+                    inViewport: rect.width > 0 && rect.height > 0,
+                    bounds: {
+                        left: rect.left,
+                        top: rect.top,
+                        right: rect.right,
+                        bottom: rect.bottom
+                    },
+                    inDOM: document.body.contains(this.toolbarContainer)
+                });
             });
-            
-            if (!this.position.isAttached) {
-                this.updatePosition();
-            }
         } else {
             console.warn('[KayTool.NodeAlign] Cannot show - toolbar container not created yet');
         }
@@ -470,7 +491,19 @@ const KayNodeAlignmentManager = {
     hide() {
         this.isVisible = false;
         if (this.toolbarContainer) {
-            this.toolbarContainer.style.display = 'none';
+            console.log('[KayTool.NodeAlign] Hiding toolbar');
+            // Use setProperty with important flag to override CSS !important rules
+            this.toolbarContainer.style.setProperty('display', 'none', 'important');
+            this.toolbarContainer.style.setProperty('visibility', 'hidden', 'important');
+            // Also add a hidden class as backup
+            this.toolbarContainer.classList.add('kay-toolbar-hidden');
+            // Verify it's hidden
+            requestAnimationFrame(() => {
+                const computedStyle = window.getComputedStyle(this.toolbarContainer);
+                console.log('[KayTool.NodeAlign] Toolbar hidden, display:', computedStyle.display, 'visibility:', computedStyle.visibility);
+            });
+        } else {
+            console.warn('[KayTool.NodeAlign] Cannot hide - toolbar container not created yet');
         }
     },
 
@@ -484,28 +517,70 @@ const KayNodeAlignmentManager = {
             return;
         }
         
-        const { windowRect, toolbarRect } = this.getRect();
+        // Wait a frame to ensure toolbar is rendered and has dimensions
+        requestAnimationFrame(() => {
+            const { windowRect, toolbarRect } = this.getRect();
+            
+            // If toolbarRect has no dimensions, use CSS centering as fallback
+            if (toolbarRect.width === 0 || toolbarRect.height === 0) {
+                console.warn('[KayTool.NodeAlign] Toolbar has no dimensions, using CSS centering');
+                this.toolbarContainer.style.left = '50%';
+                this.toolbarContainer.style.top = '20px';
+                this.toolbarContainer.style.transform = 'translate(-50%, 0)';
+                this.toolbarContainer.style.right = 'auto';
+                this.toolbarContainer.style.bottom = 'auto';
+                return;
+            }
         
-        // If toolbarRect has no dimensions, it might not be rendered yet
-        if (toolbarRect.width === 0 || toolbarRect.height === 0) {
-            console.warn('[KayTool.NodeAlign] Toolbar has no dimensions, using default position');
-            // Use default position until toolbar is properly sized
-            this.toolbarContainer.style.left = '50%';
-            this.toolbarContainer.style.top = '5%';
-            this.toolbarContainer.style.transform = 'translate(-50%, 0)';
-            return;
-        }
-        
-        let left = (this.position.leftPercentage / 100) * windowRect.width - toolbarRect.width / 2;
-        let top = (this.position.topPercentage / 100) * windowRect.height;
-        left = Math.max(0, Math.min(left, windowRect.width - toolbarRect.width));
-        top = Math.max(0, Math.min(top, windowRect.height - toolbarRect.height));
-        
-        this.toolbarContainer.style.left = `${left}px`;
-        this.toolbarContainer.style.top = `${top}px`;
-        this.toolbarContainer.style.transform = ''; // Clear any transform
-        
-        console.log('[KayTool.NodeAlign] Position updated:', { left, top, width: toolbarRect.width, height: toolbarRect.height });
+            // Calculate position based on saved percentages
+            let left = (this.position.leftPercentage / 100) * windowRect.width - toolbarRect.width / 2;
+            let top = (this.position.topPercentage / 100) * windowRect.height;
+            
+            // Clamp to ensure toolbar stays on screen
+            const minLeft = 10; // 10px margin from left edge
+            const maxLeft = windowRect.width - toolbarRect.width - 10; // 10px margin from right edge
+            const minTop = 10; // 10px margin from top
+            const maxTop = windowRect.height - toolbarRect.height - 10; // 10px margin from bottom
+            
+            left = Math.max(minLeft, Math.min(left, maxLeft));
+            top = Math.max(minTop, Math.min(top, maxTop));
+            
+            // Apply position
+            this.toolbarContainer.style.left = `${left}px`;
+            this.toolbarContainer.style.top = `${top}px`;
+            this.toolbarContainer.style.transform = ''; // Clear any transform
+            this.toolbarContainer.style.right = 'auto';
+            this.toolbarContainer.style.bottom = 'auto';
+            
+            // Verify it's on screen
+            const finalRect = this.toolbarContainer.getBoundingClientRect();
+            const isOnScreen = finalRect.left >= 0 && 
+                              finalRect.top >= 0 && 
+                              finalRect.right <= windowRect.width && 
+                              finalRect.bottom <= windowRect.height;
+            
+            if (!isOnScreen) {
+                console.warn('[KayTool.NodeAlign] Toolbar still off-screen, resetting to center-top');
+                // Reset to safe default position
+                this.toolbarContainer.style.left = '50%';
+                this.toolbarContainer.style.top = '20px';
+                this.toolbarContainer.style.transform = 'translate(-50%, 0)';
+                // Update saved position
+                this.position.leftPercentage = 50;
+                this.position.topPercentage = (20 / windowRect.height) * 100;
+                localStorage.setItem('KayNodeAlignToolbarPosition', JSON.stringify(this.position));
+            }
+            
+            console.log('[KayTool.NodeAlign] Position updated:', { 
+                left, 
+                top, 
+                width: toolbarRect.width, 
+                height: toolbarRect.height,
+                finalLeft: finalRect.left,
+                finalTop: finalRect.top,
+                isOnScreen
+            });
+        });
     },
 
     getRect() {
@@ -800,6 +875,14 @@ const KayNodeAlignmentManager = {
     },
 
     updateDisplayMode(mode) {
+        // Ensure toolbar container exists before trying to update display
+        if (!this.toolbarContainer) {
+            console.warn('[KayTool.NodeAlign] updateDisplayMode called before toolbar container exists, deferring...');
+            // Defer until container is ready
+            setTimeout(() => this.updateDisplayMode(mode), 100);
+            return;
+        }
+        
         // Ensure we have a valid mode, default to "permanent"
         const effectiveMode = (mode && typeof mode === 'string') ? mode : "permanent";
         console.log('[KayTool.NodeAlign] updateDisplayMode called with:', effectiveMode);
@@ -814,8 +897,10 @@ const KayNodeAlignmentManager = {
             const selectedNodes = this.getSelectedNodes();
             console.log('[KayTool.NodeAlign] On-select mode, selected nodes:', selectedNodes.length);
             if (selectedNodes.length >= 2) {
+                console.log('[KayTool.NodeAlign] 2+ nodes selected, showing toolbar');
                 this.show();
             } else {
+                console.log('[KayTool.NodeAlign] Less than 2 nodes selected, hiding toolbar');
                 this.hide();
             }
         } else {
@@ -833,10 +918,60 @@ const KayNodeAlignmentManager = {
             return;
         }
         try {
-            canvas.addEventListener('click', () => {
-                const currentMode = app.ui.settings.getSettingValue("KayTool.NodeAlignDisplayMode");
-                this.updateDisplayMode(currentMode);
-            });
+            // Listen for selection changes, not just clicks
+            const handleSelectionChange = () => {
+                try {
+                    if (app.ui && app.ui.settings) {
+                        const currentMode = app.ui.settings.getSettingValue("KayTool.NodeAlignDisplayMode");
+                        if (currentMode === "on-select") {
+                            // For on-select mode, check selection immediately
+                            this.updateDisplayMode(currentMode);
+                        }
+                    }
+                } catch (error) {
+                    console.error('[KayTool.NodeAlign] Error in selection change handler:', error);
+                }
+            };
+
+            // Listen to canvas click events
+            canvas.addEventListener('click', handleSelectionChange);
+            
+            // Also listen to selection events if available
+            if (canvas.onSelectionChange) {
+                canvas.onSelectionChange = ((original) => {
+                    return function(...args) {
+                        if (original) original.apply(this, args);
+                        handleSelectionChange();
+                    };
+                })(canvas.onSelectionChange);
+            }
+            
+            // Poll for selection changes as fallback (only when in on-select mode)
+            let pollInterval = null;
+            const startPolling = () => {
+                if (pollInterval) clearInterval(pollInterval);
+                pollInterval = setInterval(() => {
+                    try {
+                        if (app.ui && app.ui.settings) {
+                            const currentMode = app.ui.settings.getSettingValue("KayTool.NodeAlignDisplayMode");
+                            if (currentMode === "on-select") {
+                                // Always update display mode when in on-select mode
+                                this.updateDisplayMode(currentMode);
+                            } else {
+                                // Stop polling if not in on-select mode
+                                if (pollInterval) {
+                                    clearInterval(pollInterval);
+                                    pollInterval = null;
+                                }
+                            }
+                        }
+                    } catch (error) {
+                        // Silently ignore errors in polling
+                    }
+                }, 200); // Check every 200ms for more responsive updates
+            };
+            // Start polling immediately
+            startPolling();
         } catch (error) {
             console.error('[KayTool.NodeAlign] Error binding canvas events:', error);
         }
@@ -901,24 +1036,8 @@ function pollForCanvas() {
         window.KayNodeAlignmentManager = KayNodeAlignmentManager;
         window.initializeKayNodeAlignment = initializeKayNodeAlignment;
         
-        // Bind canvas click events for on-select mode
-        canvas.addEventListener('click', function (event) {
-            try {
-                if (app.ui && app.ui.settings) {
-                    const currentMode = app.ui.settings.getSettingValue("KayTool.NodeAlignDisplayMode");
-                    if (currentMode === "on-select") {
-                        const selectedNodes = KayNodeAlignmentManager.getSelectedNodes();
-                        if (selectedNodes.length >= 2) {
-                            KayNodeAlignmentManager.show();
-                        } else {
-                            KayNodeAlignmentManager.hide();
-                        }
-                    }
-                }
-            } catch (error) {
-                console.error('[KayTool.NodeAlign] Error in canvas click handler:', error);
-            }
-        });
+        // Note: Canvas click events are handled in bindCanvasEvents()
+        // This is just for the initial setup
         
         console.log('[KayTool.NodeAlign] Extension initialized successfully');
     } else {
